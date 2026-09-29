@@ -1,0 +1,110 @@
+// Controle de uma saída do Arduino pelo navegador (Ethernet Shield)
+// Usa apenas as bibliotecas SPI e Ethernet, que já vêm com a IDE do Arduino.
+
+/*
+* Como escolher o IP certo para a sua rede
+* Descubra a faixa da sua rede. No computador com Windows, abra o Prompt de Comando
+* e digite ipconfig. Procure "Endereço IPv4" e "Gateway padrão".
+* No celular, veja nos detalhes da rede Wi-Fi conectada. Se aparecer algo como 192.168.1.35,
+* sua faixa é 192.168.1.x.
+* Escolha um número livre no final, entre 2 e 254, que não seja o do roteador (geralmente .1).
+* Números altos, como 177 ou 200, costumam ficar fora da faixa que o roteador distribui automaticamente.
+* Confirme que ninguém usa esse número. Digite ping 192.168.1.177 antes de ligar o Arduino.
+* Se não houver resposta, está livre. 
+*/
+ 
+#include <SPI.h>
+#include <Ethernet.h>
+
+// ================== CONFIGURAÇÕES (ajuste aqui) ==================
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // pode manter este
+IPAddress ip(172,20,46,124);  // IP de um PC da Ufes. Use a mesma faixa da sua rede (ex: 192.168.1.177)
+
+const int PINO_SAIDA = 7;        // pino do relé ou LED
+                                 // NÃO use 4, 10, 11, 12, 13: são do Ethernet Shield
+
+const char SENHA[] = "1234";     // troque por uma senha sua (só letras e números)
+// =================================================================
+
+EthernetServer servidor(80);
+bool ligado = false;
+
+void setup() {
+  pinMode(PINO_SAIDA, OUTPUT);
+  digitalWrite(PINO_SAIDA, LOW);
+
+  Serial.begin(9600);
+  Ethernet.begin(mac, ip);
+  servidor.begin();
+
+  Serial.print("Pronto! Acesse no navegador: http://");
+  Serial.println(Ethernet.localIP());
+}
+
+void loop() {
+  EthernetClient cliente = servidor.available();
+  if (!cliente) return;  // ninguém acessou, volta ao início
+
+  // Lê a primeira linha do pedido, ex: "GET /?c=on&s=1234 HTTP/1.1"
+  cliente.setTimeout(1000);
+  String pedido = cliente.readStringUntil('\n');
+  while (cliente.available()) cliente.read();  // descarta o resto
+
+  // A senha está certa se aparecer "s=SENHA " no pedido
+  bool autorizado = pedido.indexOf(String("s=") + SENHA + " ") >= 0;
+
+  // Cabeçalho da resposta
+  cliente.println(F("HTTP/1.1 200 OK"));
+  cliente.println(F("Content-Type: text/html; charset=utf-8"));
+  cliente.println(F("Connection: close"));
+  cliente.println();
+
+  // Início da página HTML
+  cliente.println(F("<!DOCTYPE html><html><head>"
+                    "<meta name='viewport' content='width=device-width'>"
+                    "<title>Arduino</title></head>"
+                    "<body style='font-family:sans-serif;text-align:center'>"));
+
+  if (autorizado) {
+    // Executa o comando recebido
+    if (pedido.indexOf("c=on") >= 0)  ligado = true;
+    if (pedido.indexOf("c=off") >= 0) ligado = false;
+
+    if (ligado) {
+      digitalWrite(PINO_SAIDA, HIGH);
+    } else {
+      digitalWrite(PINO_SAIDA, LOW);
+    }
+    //digitalWrite(PINO_SAIDA, ligado ? HIGH : LOW);
+
+    // Mostra o estado e os botões
+    cliente.print(F("<h1>Estado: "));
+    
+    if(ligado){
+      cliente.print(F("LIGADO"));
+    } else {
+      cliente.print(F("DESLIGADO"));
+    }
+    //cliente.print(ligado ? F("LIGADO") : F("DESLIGADO"));
+    
+    cliente.println(F("</h1>"));
+
+    cliente.print(F("<p><a href='/?c=on&s="));
+    cliente.print(SENHA);
+    cliente.println(F("'><button style='font-size:2em;width:8em'>Ligar</button></a></p>"));
+
+    cliente.print(F("<p><a href='/?c=off&s="));
+    cliente.print(SENHA);
+    cliente.println(F("'><button style='font-size:2em;width:8em'>Desligar</button></a></p>"));
+  } else {
+    // Pede a senha
+    cliente.println(F("<h1>Controle Arduino</h1>"
+                      "<form><input name='s' type='password' placeholder='Senha' "
+                      "style='font-size:1.5em'> "
+                      "<button style='font-size:1.5em'>Entrar</button></form>"));
+  }
+
+  cliente.println(F("</body></html>"));
+  delay(1);
+  cliente.stop();
+}
